@@ -1,0 +1,179 @@
+#!/usr/bin/env node
+
+const _ = require('lodash');
+const { program } = require('commander');
+const GithubClient = require('../clients/github-client');
+
+/**
+ * Constants.
+ */
+
+const token = process.env.GITHUB_TOKEN;
+
+/**
+ * Command-line program definition.
+ */
+
+program
+  .description(`
+Produces an output with a list of:
+- PRs merged on the base branch that are missing in the given branch;
+- Unmerged commits on the base branch that are picked on the given branch (we should keep those);
+  `)
+  .option('-b, --branch <branch>', 'Branch to sync with base branch')
+  .option('-l, --base <base>', 'Branch to sync with base branch', 'master')
+  .option('-o, --owner <owner>', 'Repository owner')
+  .option('-r, --repo <repo>', '[required] Repository name')
+  .parse(process.argv);
+
+/**
+ * Paginates github commits on the given repository branch and
+ * maps them in a new object containing two properties:
+ *  - hashes, an array with all the commit hashes;
+ *  - list, an object with all commits with the key set to the commit message;
+ */
+
+const mapCommits = async ({
+  branch, page, owner, repo,
+} = {}) => {
+  const result = { list: {}, hashes: [] };
+  const github = new GithubClient({ token });
+
+  const { data: commits } = await github.client.repos.listCommits({
+    page, owner, repo, sha: branch,
+  });
+
+  for (const item of commits) {
+    result.hashes.push(item.sha);
+    result.list[item.commit.message.replace('[unmerged] ', '')] = item;
+  }
+
+  return result;
+};
+
+/**
+ * Build the list of commits discarding those after the `firstCommonHash`.
+ */
+
+const buildCommitsList = ({ firstCommonHash, commits }) => {
+  const result = {};
+
+  for (const key in commits) {
+    const element = commits[key];
+
+    if (element.sha !== firstCommonHash) {
+      result[key] = element;
+    } else {
+      break;
+    }
+  }
+
+  return result;
+};
+
+/**
+ * Command-line coroutine.
+ */
+
+(async () => {
+  const options = program.opts();
+
+  if (!options.branch || !options.owner || !options.repo) {
+    return program.help();
+  }
+
+  const {
+    base, branch, owner, repo,
+  } = program.opts();
+  const fromHashes = [];
+  const fromTemp = {};
+  const toHashes = [];
+  const toTemp = {};
+  let done = false;
+  let firstCommonHash;
+  let page = 0;
+
+  console.log('fetching commits...');
+
+  while (!done) {
+    const [fromResult, toResult] = await Promise.all([
+      mapCommits({
+        branch, page, owner, repo,
+      }),
+      mapCommits({
+        branch: base, page, owner, repo,
+      }),
+    ]);
+
+    // Cash pagination results.
+    fromHashes.push(...fromResult.hashes);
+    toHashes.push(...toResult.hashes);
+
+    _.assign(fromTemp, fromResult.list);
+    _.assign(toTemp, toResult.list);
+
+    // If we find an intersection on both branchs hashes it means
+    // that we found the commit from where we need to start building
+    // the difference from.
+    // Otherwise we need to continue to look and get the next commits page.
+    const intersection = _.intersection(fromHashes, toHashes);
+    [firstCommonHash] = intersection;
+
+    if (firstCommonHash) {
+      done = true;
+    } else {
+      page += 1;
+    }
+  }
+
+  const changelog = [];
+  const cherries = [];
+  const from = buildCommitsList({ firstCommonHash, commits: fromTemp });
+  const to = buildCommitsList({ firstCommonHash, commits: toTemp });
+
+  // Compute differences.
+  const unmerged = _.difference(Object.keys(from), Object.keys(to));
+  const newCommits = _.difference(Object.keys(to), Object.keys(from));
+
+  // Cherry-picks.
+  for (const element of unmerged) {
+    const item = from[element];
+
+    cherries.push(`- ${item.sha} - ${item.commit.message} <${item.commit.author.name}>\n`);
+  }
+
+  // New pull requests.
+  const { length } = newCommits;
+  const github = new GithubClient({
+    repo, owner, token, branch: base,
+  });
+  let counter = 0;
+
+  console.log(`Fething PR information for ${length} commits`);
+
+  for (const element of newCommits) {
+    const item = to[element];
+    const { data: [pr] } = await github.getPullRequestByCommitHash(item.sha);
+
+    // If there's no Pull Request associated that's a release commit.
+    if (!pr) {
+      changelog.push(`- ${item.commit.message}\n`);
+    } else {
+      changelog.push(`- ${pr.title} [\\#${pr.number}](${pr.html_url}) ([${pr.user.login}](${pr.user.html_url}))\n`);
+    }
+
+    counter += 1;
+
+    if (counter % 10 === 0 || counter === length) {
+      console.log(`Missing information for ${length - counter} commits`);
+    }
+  }
+
+  process.stdout.write('## Cherry-picks\n\n');
+  _.uniq(cherries).forEach((line) => process.stdout.write(line));
+
+  process.stdout.write('\n\n## Changelog\n\n');
+  _.uniq(changelog).forEach((line) => process.stdout.write(line));
+
+  process.exit();
+})();
