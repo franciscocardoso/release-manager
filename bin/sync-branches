@@ -18,11 +18,11 @@ program
   .description(`
 Produces an output with a list of:
 - PRs merged on the base branch that are missing in the given branch;
-- Unmerged commits on the base branch that are picked on the given branch (we should keep those);
+- Unmerged commits on the base branch that are picked on the given branch;
   `)
-  .option('-b, --branch <branch>', 'Branch to sync with base branch')
+  .option('-b, --branch <branch>', '[required] Branch to sync with base branch')
   .option('-l, --base <base>', 'Branch to sync with base branch', 'master')
-  .option('-o, --owner <owner>', 'Repository owner')
+  .option('-o, --owner <owner>', '[required] Repository owner')
   .option('-r, --repo <repo>', '[required] Repository name')
   .parse(process.argv);
 
