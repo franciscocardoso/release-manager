@@ -18,12 +18,14 @@ program
   .description(`
 Produces an output with a list of:
 - PRs merged on the base branch that are missing in the given branch;
+- Merged commits on the base branch that are picked on the given branch but are not covered in this step;
 - Unmerged commits on the base branch that are picked on the given branch;
   `)
   .option('-b, --branch <branch>', '[required] Branch to sync with base branch')
   .option('-l, --base <base>', 'Base branch', 'master')
   .option('-o, --owner <owner>', '[required] Repository owner')
   .option('-r, --repo <repo>', '[required] Repository name')
+  .option('-s, --step <step>', 'Base branch commit to sync to')
   .parse(process.argv);
 
 /**
@@ -53,16 +55,23 @@ const mapCommits = async ({
 
 /**
  * Build the list of commits discarding those after the `firstCommonHash`.
+ * When step is provided we only start building the list from the moment
+ * that commit is found and previous commits are discarded.
  */
 
-const buildCommitsList = ({ firstCommonHash, commits }) => {
+const buildCommitsList = ({ commits, firstCommonHash, step } = {}) => {
   const result = {};
+  let startBuilding = !step;
 
   for (const key in commits) {
     const element = commits[key];
 
+    startBuilding = startBuilding || step && _.startsWith(element.sha, step);
+
     if (element.sha !== firstCommonHash) {
-      result[key] = element;
+      if (startBuilding) {
+        result[key] = element;
+      }
     } else {
       break;
     }
@@ -83,7 +92,7 @@ const buildCommitsList = ({ firstCommonHash, commits }) => {
   }
 
   const {
-    base, branch, owner, repo,
+    base, branch, owner, repo, step,
   } = program.opts();
   const fromHashes = [];
   const fromTemp = {};
@@ -93,7 +102,7 @@ const buildCommitsList = ({ firstCommonHash, commits }) => {
   let firstCommonHash;
   let page = 0;
 
-  console.log('fetching commits...');
+  console.log('Fetching commits...');
 
   while (!done) {
     const [fromResult, toResult] = await Promise.all([
@@ -127,22 +136,40 @@ const buildCommitsList = ({ firstCommonHash, commits }) => {
   }
 
   const changelog = [];
-  const cherries = [];
-  const from = buildCommitsList({ firstCommonHash, commits: fromTemp });
-  const to = buildCommitsList({ firstCommonHash, commits: toTemp });
 
-  // Compute differences.
+  // "Full" content of given branch.
+  const from = buildCommitsList({ commits: fromTemp, firstCommonHash });
+  const mergedCherries = [];
+
+  // Content of base branch until the step commit is found.
+  const stepInto = step ? buildCommitsList({ commits: toTemp, firstCommonHash, step }) : {};
+
+  // "Full" content of base branch.
+  const to = buildCommitsList({ commits: toTemp, firstCommonHash });
+  const unmergedCherries = [];
+
+  // Unmerged code already picked into the given branch.
   const unmerged = _.difference(Object.keys(from), Object.keys(to));
-  const newCommits = _.difference(Object.keys(to), Object.keys(from));
 
-  // Cherry-picks.
   for (const element of unmerged) {
     const item = from[element];
 
-    cherries.push(`- ${item.sha} - ${item.commit.message} <${item.commit.author.name}>\n`);
+    unmergedCherries.push(`- ${item.sha} - ${item.commit.message} <${item.commit.author.name}>\n`);
   }
 
-  // New pull requests.
+  // Merged code, not covered in this step, already picked into the given branch.
+  const nonCoveredCommits = _.difference(Object.keys(to), Object.keys(stepInto));
+  const mergedAndPicked = step ? _.intersection(nonCoveredCommits, Object.keys(from)) : [];
+
+  for (const element of mergedAndPicked) {
+    const item = from[element];
+
+    mergedCherries.push(`- ${item.sha} - ${item.commit.message} <${item.commit.author.name}>\n`);
+  }
+
+  // Merged pull request to be considered in the sync.
+  const target = step ? stepInto : to;
+  const newCommits = _.difference(Object.keys(target), Object.keys(from));
   const { length } = newCommits;
   const github = new GithubClient({
     repo, owner, token, branch: base,
@@ -169,11 +196,24 @@ const buildCommitsList = ({ firstCommonHash, commits }) => {
     }
   }
 
-  process.stdout.write('## Cherry-picks\n\n');
-  _.uniq(cherries).forEach((line) => process.stdout.write(line));
+  if (unmergedCherries.length) {
+    process.stdout.write('\n\n## Unmerged Cherry-picks\n\n');
+    _.uniq(unmergedCherries).forEach((line) => process.stdout.write(line));
+  }
 
-  process.stdout.write('\n\n## Changelog\n\n');
-  _.uniq(changelog).forEach((line) => process.stdout.write(line));
+  if (mergedCherries.length) {
+    process.stdout.write('\n\n## Merged Cherry-picks\n\n');
+    _.uniq(mergedCherries).forEach((line) => process.stdout.write(line));
+  }
+
+  if (changelog.length) {
+    process.stdout.write('\n\n## Changelog\n\n');
+    _.uniq(changelog).forEach((line) => process.stdout.write(line));
+  }
+
+  if (!unmergedCherries.length && !mergedCherries.length && !changelog.length) {
+    process.stdout.write('\n\nBranches up-to-date\n\n');
+  }
 
   process.exit();
 })();
