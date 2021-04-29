@@ -21,7 +21,7 @@ Produces an output with a list of:
 - Unmerged commits on the base branch that are picked on the given branch;
   `)
   .option('-b, --branch <branch>', '[required] Branch to sync with base branch')
-  .option('-l, --base <base>', 'Branch to sync with base branch', 'master')
+  .option('-l, --base <base>', 'Base branch', 'master')
   .option('-o, --owner <owner>', '[required] Repository owner')
   .option('-r, --repo <repo>', '[required] Repository name')
   .parse(process.argv);
