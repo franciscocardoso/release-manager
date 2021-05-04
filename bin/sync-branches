@@ -2,6 +2,7 @@
 
 const _ = require('lodash');
 const { program } = require('commander');
+const ProgressBar = require('progress');
 const GithubClient = require('../clients/github-client');
 
 /**
@@ -102,7 +103,10 @@ const buildCommitsList = ({ commits, firstCommonHash, step } = {}) => {
   let firstCommonHash;
   let page = 0;
 
-  console.log('Fetching commits...');
+  // During this step we will be fetching data from github on both branches until a
+  // common commit is found. Then, the data will be chewed to facilitate building
+  // the information that we are looking for.
+  const step1Bar = new ProgressBar('Finding the branches intersection commit [:bar] :percent :etas', { incomplete: ' ', width: 20, total: 7 });
 
   while (!done) {
     const [fromResult, toResult] = await Promise.all([
@@ -135,18 +139,26 @@ const buildCommitsList = ({ commits, firstCommonHash, step } = {}) => {
     }
   }
 
+  step1Bar.tick();
+
   const changelog = [];
 
   // "Full" content of given branch.
   const from = buildCommitsList({ commits: fromTemp, firstCommonHash });
   const mergedCherries = [];
 
+  step1Bar.tick();
+
   // Content of base branch until the step commit is found.
   const stepInto = step ? buildCommitsList({ commits: toTemp, firstCommonHash, step }) : {};
+
+  step1Bar.tick();
 
   // "Full" content of base branch.
   const to = buildCommitsList({ commits: toTemp, firstCommonHash });
   const unmergedCherries = [];
+
+  step1Bar.tick();
 
   // Unmerged code already picked into the given branch.
   const unmerged = _.difference(Object.keys(from), Object.keys(to));
@@ -157,9 +169,13 @@ const buildCommitsList = ({ commits, firstCommonHash, step } = {}) => {
     unmergedCherries.push(`- ${item.sha} - ${item.commit.message} <${item.commit.author.name}>\n`);
   }
 
+  step1Bar.tick();
+
   // Merged code, not covered in this step, already picked into the given branch.
   const nonCoveredCommits = _.difference(Object.keys(to), Object.keys(stepInto));
   const mergedAndPicked = step ? _.intersection(nonCoveredCommits, Object.keys(from)) : [];
+
+  step1Bar.tick();
 
   for (const element of mergedAndPicked) {
     const item = from[element];
@@ -167,32 +183,30 @@ const buildCommitsList = ({ commits, firstCommonHash, step } = {}) => {
     mergedCherries.push(`- ${item.sha} - ${item.commit.message} <${item.commit.author.name}>\n`);
   }
 
+  step1Bar.tick();
+
   // Merged pull request to be considered in the sync.
   const target = step ? stepInto : to;
   const newCommits = _.difference(Object.keys(target), Object.keys(from));
-  const { length } = newCommits;
   const github = new GithubClient({
     repo, owner, token, branch: base,
   });
-  let counter = 0;
 
-  console.log(`Fething PR information for ${length} commits`);
+  // During this step we will be fetching full information on each PR and building
+  // the output.
+  const step2Bar = new ProgressBar('Building synchronization ouput           [:bar] :rate/bps :percent :etas', { incomplete: ' ', width: 20, total: newCommits.length });
 
   for (const element of newCommits) {
     const item = to[element];
     const { data: [pr] } = await github.getPullRequestByCommitHash(item.sha);
+
+    step2Bar.tick();
 
     // If there's no Pull Request associated that's a release commit.
     if (!pr) {
       changelog.push(`- ${item.commit.message}\n`);
     } else {
       changelog.push(`- ${pr.title} [\\#${pr.number}](${pr.html_url}) ([${pr.user.login}](${pr.user.html_url}))\n`);
-    }
-
-    counter += 1;
-
-    if (counter % 10 === 0 || counter === length) {
-      console.log(`Missing information for ${length - counter} commits`);
     }
   }
 
