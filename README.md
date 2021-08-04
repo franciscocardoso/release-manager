@@ -1,12 +1,17 @@
 # release-manager
 Utils to manage unconformities between multiple branches on the same repository.
 
-## Requirements
-This modules needs Github access to the repositories you want to manage. You can use environment variables to achieve this:
+## Configuration
+
+This modules needs Github access to the repositories you want to manage.
+You can use environment variables to achieve this:
 
 ```sh
-GITHUB_TOKEN=<github-token>
+  GITHUB_TOKEN=<github-token>
 ```
+
+Instructions to get a development token:
+- [Creating a personal access token]
 
 ## Usage
 
@@ -27,10 +32,17 @@ Options:
   -h, --help             display help for command
 ```
 
+#### Install
+
+```sh
+  npm i -g .
+```
+
+
 #### Example
 
 ```sh
-./bin/sync-branches -b <branch-name> -o <owner> -r <repository-name> -s <target-commit-hash>
+  sync-branches -b <branch-name> -o <owner> -r <repository-name> -s <target-commit-hash>
 ```
 
 #### Output
@@ -54,3 +66,6 @@ Options:
 - Pull Request title 3 <link-to-pull-request> <link-to-author-github-profile>
 - Pull Request title 4 <link-to-pull-request> <link-to-author-github-profile>
 ```
+
+
+[Creating a personal access token]: https://docs.github.com/en/github/authenticating-to-github/keeping-your-account-and-data-secure/creating-a-personal-access-token
